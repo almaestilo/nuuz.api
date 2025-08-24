@@ -1,0 +1,15 @@
+/nuuz.api/obj/Debug/net8.0/nuuz.api.AssemblyInfo.cs
+/nuuz.api/obj/*
+/nuuz.api/.vs/nuuz.api/v17/.suo
+/nuuz.api/.vs/nuuz.api/FileContentIndex/bda1f27b-1e58-42d8-8da3-896978f2ad0d.vsidx
+/nuuz.api/bin/*
+/nuuz.api/.vs/nuuz.api/config/applicationhost.config
+/nuuz.api/.vs/*
+/Nuuz.Application/bin/*
+/Nuuz.Application/obj/*
+/Nuuz.Common/bin/*
+/Nuuz.Common/obj/*
+/Nuuz.Domain/obj/*
+/Nuuz.Infrastructure/bin/*
+/Nuuz.Infrastructure/obj/*
+/Nuuz.Domain/bin/*

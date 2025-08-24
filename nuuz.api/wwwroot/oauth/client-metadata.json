@@ -1,0 +1,14 @@
+{
+  "client_id": "https://f067e2ff0a9a.ngrok-free.app/oauth/client-metadata.json",
+  "client_name": "Nuuz",
+  "application_type": "web",
+
+  "grant_types": [ "authorization_code", "refresh_token" ],
+  "response_types": [ "code" ],
+  "redirect_uris": [
+    "https://f067e2ff0a9a.ngrok-free.app/api/share/bluesky/connect/callback"
+  ],
+  "scope": "atproto transition:generic",
+  "token_endpoint_auth_method": "none",
+  "dpop_bound_access_tokens": true
+}
