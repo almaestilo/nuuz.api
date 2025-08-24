@@ -130,6 +130,7 @@ builder.Services.AddSingleton<ISparkNotesService, SparkNotesService>();
 
 // ------------------ Background workers ------------------
 builder.Services.AddHostedService<PulseSnapshotService>();
+builder.Services.AddHostedService<MoodModelTrainingService>();
 var ingestionEnabled = builder.Configuration.GetValue<bool>("Ingestion:Enabled");
 if (builder.Environment.IsDevelopment() && ingestionEnabled)
 {
