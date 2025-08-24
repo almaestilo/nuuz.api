@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace Nuuz.Infrastructure.Services
 {
@@ -20,6 +21,7 @@ namespace Nuuz.Infrastructure.Services
         private readonly IUserSaveRepository _saves;
         private readonly IInterestRepository _interests;
         private readonly IMoodFeedbackService _moodFeedback;
+        private readonly IMoodModelService _moodModel;
 
         // Editorial tuning
         private readonly string[] _penaltyKeywords;     // lowercased
@@ -33,6 +35,7 @@ namespace Nuuz.Infrastructure.Services
             IUserSaveRepository saves,
             IInterestRepository interests,
             IMoodFeedbackService moodFeedback,
+            IMoodModelService moodModel,
             IConfiguration cfg
         )
         {
@@ -42,6 +45,7 @@ namespace Nuuz.Infrastructure.Services
             _saves = saves;
             _interests = interests;
             _moodFeedback = moodFeedback;
+            _moodModel = moodModel;
 
             _penaltyKeywords = cfg.GetSection("Pulse:PenaltyKeywords").GetChildren()
                                   .Select(c => (c.Value ?? "").Trim().ToLowerInvariant())
@@ -172,6 +176,10 @@ namespace Nuuz.Infrastructure.Services
                 tuning.Enabled ? await _moodFeedback.GetProfileAsync(firebaseUid, tuning.Mood, System.Threading.CancellationToken.None)
                                : new();
 
+            MoodModel? model = null;
+            if (tuning.Enabled)
+                model = await _moodModel.GetModelAsync(firebaseUid, tuning.Mood, CancellationToken.None);
+
             // mood centroids (user + global) for vector similarity boost
             double[]? userCentroid = null, globalCentroid = null;
             if (tuning.Enabled)
@@ -206,7 +214,18 @@ namespace Nuuz.Infrastructure.Services
                 double interestScore = interestHit ? 0.8 : 0.2;
 
                 double moodScore = 0; string? moodWhy = null;
-                if (tuning.Enabled) moodScore = tuning.ScoreArticle(a, out moodWhy);
+                double heuristicScore = 0; double? modelScore = null;
+                if (tuning.Enabled)
+                {
+                    heuristicScore = tuning.ScoreArticle(a, out moodWhy);
+                    moodScore = heuristicScore;
+                    if (model is not null)
+                    {
+                        modelScore = model.Predict(a);
+                        moodScore = (moodScore + modelScore.Value) * 0.5;
+                    }
+                    await _moodModel.RecordEvaluationAsync(firebaseUid, tuning.Mood, a.Id, heuristicScore, modelScore);
+                }
 
                 double noveltyScore = tuning.ChallengeFactor > 0 ? Math.Min(0.5, (a.Tags?.Count ?? 0) * 0.05) : 0.0;
                 double learned = tuning.Enabled ? LearnedAffinityBoost(a, profile) : 0.0;
