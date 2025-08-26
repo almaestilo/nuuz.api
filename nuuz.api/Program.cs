@@ -86,6 +86,7 @@ builder.Services.AddScoped<IMoodService, MoodService>();
 builder.Services.AddScoped<IInterestMatcher, InterestMatcher>();
 // IMPORTANT: Scoped (not singleton) — it depends on scoped IArticleRepository
 builder.Services.AddScoped<IMoodFeedbackService, MoodFeedbackService>();
+builder.Services.AddScoped<IMoodModelService, MoodModelService>();
 builder.Services.AddScoped<IPulseService, PulseService>();
 builder.Services.AddScoped<IShareService, ShareService>();
 builder.Services.AddScoped<IShareProvider, TwitterShareProvider>();
@@ -129,6 +130,7 @@ builder.Services.AddSingleton<ISparkNotesService, SparkNotesService>();
 
 // ------------------ Background workers ------------------
 builder.Services.AddHostedService<PulseSnapshotService>();
+builder.Services.AddHostedService<MoodModelTrainingService>();
 var ingestionEnabled = builder.Configuration.GetValue<bool>("Ingestion:Enabled");
 if (builder.Environment.IsDevelopment() && ingestionEnabled)
 {
