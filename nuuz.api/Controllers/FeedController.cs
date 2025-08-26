@@ -2,7 +2,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Nuuz.Application.DTOs;
 using Nuuz.Application.Services;
-using Nuuz.Application.Abstraction;
 using System.Security.Claims;
 using System.ComponentModel.DataAnnotations;
 
@@ -14,17 +13,14 @@ namespace Nuuz.Api.Controllers;
 public class FeedController : ControllerBase
 {
     private readonly IFeedService _feed;
-    private readonly IArticleRepository _articles;           // NEW
     private readonly IMoodFeedbackService _moodFeedback;     // NEW
 
     public FeedController(
         IFeedService feed,
-        IArticleRepository articles,                         // NEW
         IMoodFeedbackService moodFeedback                    // NEW
     )
     {
         _feed = feed;
-        _articles = articles;
         _moodFeedback = moodFeedback;
     }
 
@@ -102,34 +98,24 @@ public class FeedController : ControllerBase
         public DateTimeOffset? Ts { get; set; }                   // optional client timestamp
     }
 
+    [HttpPost("mood")]
     [HttpPost("/api/feedback/mood")]
-    public async Task<IActionResult> PostMood([FromBody] MoodFeedbackDto dto)
+    public async Task<IActionResult> PostMood([FromBody] MoodFeedbackDto dto, CancellationToken ct)
     {
         var userId = Uid();
 
-        var article = await _articles.GetAsync(dto.ArticleId);
-        if (article is null) return NotFound("Article not found.");
+        var action = Math.Sign(dto.Signal) >= 0
+            ? MoodFeedbackAction.MoreLikeThis
+            : MoodFeedbackAction.NotRelevant;
 
-        var features = IMoodFeedbackService.ExtractFeaturesFromArticle(article);
-
-        var signal = new IMoodFeedbackService.MoodSignal
+        var recordDto = new RecordMoodFeedbackDto
         {
-            UserId = userId,
+            ArticleId = dto.ArticleId,
             Mood = dto.Mood,
-            Signal = Math.Sign(dto.Signal) == 0 ? 1 : Math.Sign(dto.Signal),
-            Timestamp = dto.Ts ?? DateTimeOffset.UtcNow,
-            Features = features
+            Action = action
         };
 
-        await _moodFeedback.RecordAsync(signal);
+        await _moodFeedback.RecordFeedbackAsync(userId, recordDto, ct);
         return NoContent();
-    }
-
-    [HttpPost("mood")]
-    public async Task<IActionResult> Record([FromBody] RecordMoodFeedbackDto dto, CancellationToken ct)
-    {
-        var uid = Uid();
-        await _moodFeedback.RecordFeedbackAsync(uid, dto, ct);
-        return Ok(new { ok = true });
     }
 }
