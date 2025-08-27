@@ -59,7 +59,7 @@ namespace Nuuz.Infrastructure.Services
                 var features = MoodModel.ExtractFeatures(article);
                 data.Add(new Input
                 {
-                    Label = IsPositive(action) ? 1f : 0f,
+                    Label = IsPositive(action),
                     Arousal = (float)features[0],
                     Sentiment = (float)features[1],
                     Depth = (float)features[2],
@@ -145,7 +145,7 @@ namespace Nuuz.Infrastructure.Services
 
         private sealed class Input
         {
-            [ColumnName("Label")] public float Label { get; set; }
+            [ColumnName("Label")] public bool Label { get; set; }
             public float Arousal { get; set; }
             public float Sentiment { get; set; }
             public float Depth { get; set; }
