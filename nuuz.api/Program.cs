@@ -99,7 +99,17 @@ builder.Services.AddScoped<IFeedService, FeedService>();
 // --------------- HttpClient factory ---------------------
 builder.Services.AddHttpClient(); // CreateClient()
 builder.Services.AddHttpClient<IContentExtractor, SimpleContentExtractor>();
-builder.Services.AddHttpClient<IAISummarizer, OpenAiSummarizer>();
+
+var useLocalSummarizer = builder.Configuration.GetValue<bool>("UseLocalSummarizer");
+if (useLocalSummarizer)
+{
+    builder.Services.AddSingleton<IAISummarizer, OnnxSummarizer>();
+}
+else
+{
+    builder.Services.AddHttpClient<IAISummarizer, OpenAiSummarizer>();
+}
+
 builder.Services.AddHttpClient<IPulseReranker, PulseRerankerOpenAI>();
 
 // Optional named client
