@@ -25,4 +25,17 @@
     <ProjectReference Include="..\Nuuz.Domain\Nuuz.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="onnx\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="onnx\model.onnx">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="onnx\tokenizer.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

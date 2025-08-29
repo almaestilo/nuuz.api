@@ -103,20 +103,26 @@ namespace Nuuz.Infrastructure.Services
 
         private string ExtractiveSummary(string text)
         {
-            var sentences = Regex.Split(text, @"(?<=[.!?])\s+")
+            try
+            {
+                var sentences = Regex.Split(text, @"(?<=[.!?])\s+")
                 .Where(s => s.Length > 20)
                 .Take(20)
                 .ToArray();
-            if (sentences.Length == 0) return text;
+                if (sentences.Length == 0) return text;
 
-            var docEmb = Embed(text);
-            var ranked = sentences
-                .Select(s => (s, score: TensorPrimitives.CosineSimilarity(Embed(s), docEmb)))
-                .OrderByDescending(x => x.score)
-                .Take(3)
-                .Select(x => x.s.Trim());
-            var summary = string.Join(" ", ranked);
-            return summary.Length > 480 ? summary[..480] + "…" : summary;
+                var docEmb = Embed(text);
+                var ranked = sentences
+                    .Select(s => (s, score: TensorPrimitives.CosineSimilarity(Embed(s), docEmb)))
+                    .OrderByDescending(x => x.score)
+                    .Take(3)
+                    .Select(x => x.s.Trim());
+                var summary = string.Join(" ", ranked);
+                return summary.Length > 480 ? summary[..480] + "…" : summary;
+            } catch (Exception ex) {
+                throw ex;
+            }
+            return "";
         }
 
         private string SimpleSummary(string text)
