@@ -55,12 +55,13 @@ namespace Nuuz.Infrastructure.Services
                     var matcher = scope.ServiceProvider.GetRequiredService<IInterestMatcher>();
                     var summarizer = scope.ServiceProvider.GetRequiredService<IAISummarizer>();
                     var spark = scope.ServiceProvider.GetRequiredService<ISparkNotesService>();
+                    var unified = scope.ServiceProvider.GetRequiredService<IUnifiedNotesService>();
                     var extractor = scope.ServiceProvider.GetRequiredService<IContentExtractor>();
 
                     foreach (var feedUrl in _sources)
                     {
                         if (ct.IsCancellationRequested) break;
-                        await IngestFeed(feedUrl, db, articles, matcher, summarizer, spark, extractor, ct);
+                        await IngestFeed(feedUrl, db, articles, matcher, summarizer, spark, unified, extractor, ct);
                     }
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
@@ -80,6 +81,7 @@ namespace Nuuz.Infrastructure.Services
             IInterestMatcher matcher,
             IAISummarizer summarizer,
             ISparkNotesService spark,
+            IUnifiedNotesService unified,
             IContentExtractor extractor,
             CancellationToken ct)
         {
@@ -115,23 +117,7 @@ namespace Nuuz.Infrastructure.Services
                             var extracted = await extractor.ExtractAsync(url, rssHtml, ct);
                             var text = string.IsNullOrWhiteSpace(extracted.Text) ? title : extracted.Text;
 
-                            // Generate SparkNotes once early, but don't let it block ingestion
-                            SparkNotesResult sparkNotes;
-                            try
-                            {
-                                sparkNotes = await spark.BuildAsync(url, title, text, ct);
-                            }
-                            catch
-                            {
-                                sparkNotes = new SparkNotesResult(
-$@"<h2>Nuuz SparkNotes</h2>
-<p class=""kicker"">{System.Net.WebUtility.HtmlEncode(title)}</p>
-<p>We couldn’t generate a brief yet. Tap “Read original”.</p>
-<p class=""cta""><a href=""{url}"" target=""_blank"" rel=""noopener nofollow"">Read the original</a></p>",
-                                    title);
-                            }
-
-                            // Summaries + fine-grained signals (primary path)
+                            // Summaries + fine-grained signals + SparkNotes in a single call (primary path)
                             string summary, vibe; string[] tags;
                             double? sent = null, sentVar = null, arousal = null;
 
@@ -142,9 +128,13 @@ $@"<h2>Nuuz SparkNotes</h2>
                             int readMinutes = Math.Clamp((int)Math.Round((text.Split((char[])null, StringSplitOptions.RemoveEmptyEntries).Length) / 220.0), 1, 60);
                             string genre = "Report", eventStage = "Feature", format = readMinutes <= 4 ? "Short" : (readMinutes >= 14 ? "Longform" : "Standard");
 
+                            SparkNotesResult sparkNotes;
+
                             try
                             {
-                                var rich = await summarizer.SummarizeSignalsAsync(title, text, ct);
+                                var unifiedRes = await unified.BuildAsync(url, title, text, ct);
+                                var rich = unifiedRes.Rich;
+                                sparkNotes = unifiedRes.Spark;
 
                                 summary = string.IsNullOrWhiteSpace(rich.Summary) ? title : rich.Summary;
                                 vibe = string.IsNullOrWhiteSpace(rich.Vibe) ? "Neutral" : rich.Vibe;
@@ -172,6 +162,21 @@ $@"<h2>Nuuz SparkNotes</h2>
                             }
                             catch
                             {
+                                // Fallback path: try independent services
+                                try
+                                {
+                                    sparkNotes = await spark.BuildAsync(url, title, text, ct);
+                                }
+                                catch
+                                {
+                                    sparkNotes = new SparkNotesResult(
+$@"<h2>Nuuz SparkNotes</h2>
+<p class=""kicker"">{System.Net.WebUtility.HtmlEncode(title)}</p>
+<p>We couldn't generate a brief yet. Tap Read original.</p>
+<p class=""cta""><a href=""{url}"" target=""_blank"" rel=""noopener nofollow"">Read the original</a></p>",
+                                        title);
+                                }
+
                                 // Fallback: simple heuristics already implied by defaults above
                                 summary = string.IsNullOrWhiteSpace(rssHtml) ? title : title;
                                 var s = HeuristicVibeEstimator.EstimateSentiment(text);

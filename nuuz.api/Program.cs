@@ -138,6 +138,9 @@ builder.Services.AddSingleton<ILLMClient>(sp =>
 // SparkNotes generator
 builder.Services.AddSingleton<ISparkNotesService, SparkNotesService>();
 
+// Unified (one-call) summarizer + SparkNotes
+builder.Services.AddHttpClient<IUnifiedNotesService, UnifiedNotesService>();
+
 // ------------------ Background workers ------------------
 builder.Services.AddHostedService<PulseSnapshotService>();
 builder.Services.AddHostedService<MoodModelTrainingService>();
