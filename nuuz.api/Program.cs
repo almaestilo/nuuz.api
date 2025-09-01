@@ -1,4 +1,4 @@
-﻿using System.Net.Http.Headers;
+using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.OpenApi.Models;
 using Microsoft.IdentityModel.Tokens;
@@ -83,8 +83,18 @@ builder.Services.AddScoped<IFeedbackRepository, FirestoreFeedbackRepository>();
 
 // ------------------ Domain Services ---------------------
 builder.Services.AddScoped<IMoodService, MoodService>();
-builder.Services.AddScoped<IInterestMatcher, InterestMatcher>();
-// IMPORTANT: Scoped (not singleton) — it depends on scoped IArticleRepository
+// Switch to semantic interest matcher if enabled
+var semanticMatcher = builder.Configuration.GetValue<bool>("Interests:SemanticMatching");
+if (semanticMatcher)
+{
+    builder.Services.AddHttpClient<ITextEmbedder, OpenAITextEmbedder>();
+    builder.Services.AddScoped<IInterestMatcher, EmbeddingInterestMatcher>();
+}
+else
+{
+    builder.Services.AddScoped<IInterestMatcher, InterestMatcher>();
+}
+// IMPORTANT: Scoped (not singleton) � it depends on scoped IArticleRepository
 builder.Services.AddScoped<IMoodFeedbackService, MoodFeedbackService>();
 builder.Services.AddScoped<IMoodModelService, MoodModelService>();
 builder.Services.AddScoped<IPulseService, PulseService>();
@@ -93,7 +103,7 @@ builder.Services.AddScoped<IShareProvider, TwitterShareProvider>();
 builder.Services.AddScoped<IShareProvider, BlueskyShareProvider>();
 builder.Services.AddScoped<IFeedbackService, FeedbackService>();
 
-// ✅ Register the feed service implementation
+// ? Register the feed service implementation
 builder.Services.AddScoped<IFeedService, FeedService>();
 
 // --------------- HttpClient factory ---------------------
@@ -205,3 +215,4 @@ app.MapGet("/_debug/webroot", (IWebHostEnvironment env) =>
 }).AllowAnonymous();
 
 app.Run();
+

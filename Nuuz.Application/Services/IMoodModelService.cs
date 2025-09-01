@@ -9,6 +9,7 @@ namespace Nuuz.Application.Services
     {
         Task<MoodModel?> GetModelAsync(string userId, string mood, CancellationToken ct = default);
         Task TrainAsync(string userId, string mood, CancellationToken ct = default);
+        Task TrainGlobalAsync(string mood, CancellationToken ct = default);
         Task RecordEvaluationAsync(string userId, string mood, string articleId, double heuristicScore, double? modelScore, CancellationToken ct = default);
     }
 

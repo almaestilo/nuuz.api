@@ -53,6 +53,12 @@ namespace Nuuz.Infrastructure.Services
                             await model.TrainAsync(u.FirebaseUid, mood, ct);
                         }
                     }
+
+                    // Also refresh global per-mood models as fallbacks for cold-start users
+                    foreach (var mood in Moods)
+                    {
+                        await model.TrainGlobalAsync(mood, ct);
+                    }
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
                 catch (Exception ex)

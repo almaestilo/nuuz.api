@@ -1,4 +1,4 @@
-﻿using Google.Cloud.Firestore;
+using Google.Cloud.Firestore;
 using Microsoft.Extensions.Configuration;
 using Nuuz.Application.Abstraction;
 using Nuuz.Application.DTOs;
@@ -22,6 +22,7 @@ namespace Nuuz.Infrastructure.Services
         private readonly IInterestRepository _interests;
         private readonly IMoodFeedbackService _moodFeedback;
         private readonly IMoodModelService _moodModel;
+        private readonly IConfiguration _cfg;
 
         // Editorial tuning
         private readonly string[] _penaltyKeywords;     // lowercased
@@ -46,6 +47,7 @@ namespace Nuuz.Infrastructure.Services
             _interests = interests;
             _moodFeedback = moodFeedback;
             _moodModel = moodModel;
+            _cfg = cfg;
 
             _penaltyKeywords = cfg.GetSection("Pulse:PenaltyKeywords").GetChildren()
                                   .Select(c => (c.Value ?? "").Trim().ToLowerInvariant())
@@ -82,7 +84,7 @@ namespace Nuuz.Infrastructure.Services
                 qCreated = qCreated.StartAfter(ts);
             }
 
-            // ── OVERRIDE: mood paused → show recency only
+            // -- OVERRIDE: mood paused ? show recency only
             if (overrideMood)
             {
                 var recent = await TryRecentAsync(limit * 2, qPublished, qCreated, qArbitrary);
@@ -107,7 +109,7 @@ namespace Nuuz.Infrastructure.Services
                 };
             }
 
-            // ── NORMAL PATH
+            // -- NORMAL PATH
             var selectedIds = (user.InterestIds ?? new List<string>()).Take(10).ToList();
 
             Query baseQ = qPublished; // prefer PublishedAt
@@ -166,6 +168,13 @@ namespace Nuuz.Infrastructure.Services
                     (tokenHit || idHit ? preferred : others).Add(a);
                 }
                 docs = preferred.Concat(others).ToList();
+            }
+
+            // Optional: strict interest-only mode (no off-topic backfills)
+            var strictOnly = _cfg.GetValue<bool>("Feed:StrictInterestOnly");
+            if (strictOnly && selectedIds.Count > 0)
+            {
+                docs = docs.Where(a => (a.InterestMatches ?? new List<string>()).Intersect(selectedIds).Any()).ToList();
             }
 
             // ---------- scoring / ordering ----------
@@ -350,7 +359,7 @@ namespace Nuuz.Infrastructure.Services
             var nextCursor2 = lastTime.ToDateTimeOffset().UtcTicks.ToString();
 
             var explanations = new List<string> {
-                tuning.Enabled ? $"Tuned for {tuning.Mood} • {tuning.BlendLabel}" : "Showing all (no mood filter)"
+                tuning.Enabled ? $"Tuned for {tuning.Mood} � {tuning.BlendLabel}" : "Showing all (no mood filter)"
             };
             if (profile.Count > 0) explanations.Add("Learning your vibe (thanks for the feedback)");
 
@@ -390,7 +399,7 @@ namespace Nuuz.Infrastructure.Services
 
             var tuning = MoodTuning.Create(mood, blend, overrideMood);
             var explanations = new List<string>();
-            if (tuning.Enabled) explanations.Add($"Sorted for {tuning.Mood} • {tuning.BlendLabel}");
+            if (tuning.Enabled) explanations.Add($"Sorted for {tuning.Mood} � {tuning.BlendLabel}");
             else explanations.Add("Sorted by date saved");
 
             List<Article> ordered;
@@ -430,7 +439,7 @@ namespace Nuuz.Infrastructure.Services
                     Vibe = a.Vibe,
                     Tags = a.Tags,
                     Saved = true,
-                    Why = tuning.Enabled ? $"Saved • tuned for {tuning.Mood}" : "You saved this.",
+                    Why = tuning.Enabled ? $"Saved � tuned for {tuning.Mood}" : "You saved this.",
                     Collections = s.Collections ?? new List<string>(),
                     Note = s.Note
                 });
@@ -579,7 +588,29 @@ namespace Nuuz.Infrastructure.Services
             if (matches) bits.Add("Matches your topics");
             bits.Add("Fresh");
             if (!string.IsNullOrWhiteSpace(moodWhy)) bits.Add(moodWhy);
-            return string.Join(" • ", bits.Distinct());
+            return string.Join(" � ", bits.Distinct());
+        }
+        // Verify that an article truly matches one of the selected interests by token/synonym hit
+        private static bool VerifiedInterestHit(Article a, List<string> selectedIds, Dictionary<string, string> interestNameById)
+        {
+            if (selectedIds is null || selectedIds.Count == 0) return false;
+            var overlap = (a.InterestMatches ?? new List<string>()).Intersect(selectedIds).ToList();
+            if (overlap.Count == 0) return false;
+
+            var titleTags = ((a.Title ?? string.Empty) + " " + string.Join(' ', a.Tags ?? new List<string>())).ToLowerInvariant();
+            var tokens = Tokenize(titleTags);
+
+            foreach (var id in overlap)
+            {
+                if (!interestNameById.TryGetValue(id, out var name)) continue;
+                foreach (var syn in GetSynonymsForInterest(name))
+                {
+                    var s = (syn ?? string.Empty).Trim().ToLowerInvariant();
+                    if (s.Length == 0) continue;
+                    if (tokens.Contains(s)) return true;
+                }
+            }
+            return false;
         }
 
         private static string? MergeWhy(string? a, string? b)
@@ -741,7 +772,7 @@ namespace Nuuz.Infrastructure.Services
                         break;
                 }
 
-                // Comfort–Challenge targeting via arousal
+                // Comfort�Challenge targeting via arousal
                 var arousalTarget = 1 - Blend; // your UI semantics
                 s += 0.20 * (1 - Math.Abs(arousal - arousalTarget)); // closeness
 
@@ -752,7 +783,7 @@ namespace Nuuz.Infrastructure.Services
                     why.Add("contrast");
                 }
 
-                reason = string.Join(" • ", why.Distinct());
+                reason = string.Join(" � ", why.Distinct());
                 return Clamp01(s);
             }
 
@@ -797,7 +828,7 @@ namespace Nuuz.Infrastructure.Services
             }
         }
 
-        // Learned profile → affinity boost (kept from your original)
+        // Learned profile ? affinity boost (kept from your original)
         private static double LearnedAffinityBoost(Article a, Dictionary<string, Dictionary<string, double>> profile)
         {
             double s = 0;
@@ -960,3 +991,4 @@ namespace Nuuz.Infrastructure.Services
         }
     }
 }
+
