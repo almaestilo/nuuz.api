@@ -1,4 +1,4 @@
-using Google.Cloud.Firestore;
+ï»¿using Google.Cloud.Firestore;
 using Microsoft.Extensions.Configuration;
 using Nuuz.Application.Abstraction;
 using Nuuz.Application.DTOs;
@@ -215,7 +215,7 @@ namespace Nuuz.Infrastructure.Services
 
             foreach (var a in docs)
             {
-                var published = a.PublishedAt.ToDateTimeOffset();
+                var published = EffectiveTime(a);
                 double recencyHours = Math.Max(1, (now - published).TotalHours);
                 double recencyScore = 1.0 / Math.Pow(recencyHours, 0.35);
 
@@ -291,7 +291,7 @@ namespace Nuuz.Infrastructure.Services
             // Primary ordering by total
             var ordered = scored
                 .OrderByDescending(s => s.Total)
-                .ThenByDescending(s => s.A.PublishedAt.ToDateTimeOffset())
+                .ThenByDescending(s => EffectiveTime(s.A))
                 .ToList();
 
             // Mood-first selection with threshold relaxation
@@ -355,11 +355,15 @@ namespace Nuuz.Infrastructure.Services
                 moodWhySelector: id => finalDocs.First(y => y.A.Id == id).Why
             );
 
-            var lastTime = finalDocs.LastOrDefault().A.PublishedAt;
-            var nextCursor2 = lastTime.ToDateTimeOffset().UtcTicks.ToString();
+            string? nextCursor2 = null;
+            if (finalDocs.Count > 0)
+            {
+                var lastTime = EffectiveTime(finalDocs[^1].A);
+                nextCursor2 = lastTime.UtcTicks.ToString();
+            }
 
             var explanations = new List<string> {
-                tuning.Enabled ? $"Tuned for {tuning.Mood} • {tuning.BlendLabel}" : "Showing all (no mood filter)"
+                tuning.Enabled ? $"Tuned for {tuning.Mood} â€¢ {tuning.BlendLabel}" : "Showing all (no mood filter)"
             };
             if (profile.Count > 0) explanations.Add("Learning your vibe (thanks for the feedback)");
 
@@ -399,7 +403,7 @@ namespace Nuuz.Infrastructure.Services
 
             var tuning = MoodTuning.Create(mood, blend, overrideMood);
             var explanations = new List<string>();
-            if (tuning.Enabled) explanations.Add($"Sorted for {tuning.Mood} • {tuning.BlendLabel}");
+            if (tuning.Enabled) explanations.Add($"Sorted for {tuning.Mood} â€¢ {tuning.BlendLabel}");
             else explanations.Add("Sorted by date saved");
 
             List<Article> ordered;
@@ -408,7 +412,7 @@ namespace Nuuz.Infrastructure.Services
                 ordered = articles
                     .Select(a => (A: a, Score: tuning.ScoreArticle(a, out _)))
                     .OrderByDescending(x => x.Score)
-                    .ThenByDescending(x => x.A.PublishedAt.ToDateTimeOffset())
+                    .ThenByDescending(x => EffectiveTime(x.A))
                     .Select(x => x.A)
                     .ToList();
             }
@@ -433,20 +437,25 @@ namespace Nuuz.Infrastructure.Services
                     SourceId = a.SourceId,
                     Title = a.Title,
                     Author = a.Author,
-                    PublishedAt = a.PublishedAt.ToDateTimeOffset(),
+                    PublishedAt = EffectiveTime(a),
                     ImageUrl = a.ImageUrl,
                     Summary = a.Summary,
                     Vibe = a.Vibe,
                     Tags = a.Tags,
                     Saved = true,
-                    Why = tuning.Enabled ? $"Saved • tuned for {tuning.Mood}" : "You saved this.",
+                    Why = tuning.Enabled ? $"Saved â€¢ tuned for {tuning.Mood}" : "You saved this.",
                     Collections = s.Collections ?? new List<string>(),
                     Note = s.Note
                 });
             }
 
-            var nextSaved = savesSnap.Documents.LastOrDefault()?.GetValue<Timestamp>("savedAt")
-                .ToDateTimeOffset().UtcTicks.ToString();
+            string? nextSaved = null;
+            var lastSavedDoc = savesSnap.Documents.LastOrDefault();
+            if (lastSavedDoc != null)
+            {
+                var savedAt = lastSavedDoc.GetValue<Timestamp>("savedAt");
+                nextSaved = savedAt.ToDateTimeOffset().UtcTicks.ToString();
+            }
 
             return new FeedPageDto { Items = items, NextCursor = nextSaved, Tuned = tuning.Enabled, Explanations = explanations };
         }
@@ -505,6 +514,17 @@ namespace Nuuz.Infrastructure.Services
             => throw new NotImplementedException();
 
         // -------- helpers --------
+
+        private static DateTimeOffset EffectiveTime(Article a)
+        {
+            var published = a.PublishedAt;
+            if (!published.Equals(default(Timestamp))) return published.ToDateTimeOffset();
+
+            var created = a.CreatedAt;
+            if (!created.Equals(default(Timestamp))) return created.ToDateTimeOffset();
+
+            return DateTimeOffset.UnixEpoch;
+        }
         private async Task<List<Article>> TryRecentAsync(int take, params Query[] queries)
         {
             foreach (var q in queries)
@@ -553,7 +573,7 @@ namespace Nuuz.Infrastructure.Services
                     SourceId = a.SourceId,
                     Title = a.Title,
                     Author = a.Author,
-                    PublishedAt = a.PublishedAt.ToDateTimeOffset(),
+                    PublishedAt = EffectiveTime(a),
                     ImageUrl = a.ImageUrl,
                     Summary = a.Summary,
                     Vibe = a.Vibe,
@@ -588,7 +608,7 @@ namespace Nuuz.Infrastructure.Services
             if (matches) bits.Add("Matches your topics");
             bits.Add("Fresh");
             if (!string.IsNullOrWhiteSpace(moodWhy)) bits.Add(moodWhy);
-            return string.Join(" • ", bits.Distinct());
+            return string.Join(" â€¢ ", bits.Distinct());
         }
         // Verify that an article truly matches one of the selected interests by token/synonym hit
         private static bool VerifiedInterestHit(Article a, List<string> selectedIds, Dictionary<string, string> interestNameById)
@@ -772,7 +792,7 @@ namespace Nuuz.Infrastructure.Services
                         break;
                 }
 
-                // Comfort–Challenge targeting via arousal
+                // Comfortâ€“Challenge targeting via arousal
                 var arousalTarget = 1 - Blend; // your UI semantics
                 s += 0.20 * (1 - Math.Abs(arousal - arousalTarget)); // closeness
 
@@ -783,7 +803,7 @@ namespace Nuuz.Infrastructure.Services
                     why.Add("contrast");
                 }
 
-                reason = string.Join(" • ", why.Distinct());
+                reason = string.Join(" â€¢ ", why.Distinct());
                 return Clamp01(s);
             }
 
@@ -921,8 +941,8 @@ namespace Nuuz.Infrastructure.Services
             foreach (var g in groups)
             {
                 var best = g
-                    .OrderByDescending(a => a.PublishedAt.ToDateTimeOffset())
-                    .ThenByDescending(a => a.CreatedAt.ToDateTimeOffset())
+                    .OrderByDescending(a => EffectiveTime(a))
+                    .ThenByDescending(a => (a.CreatedAt != null) ? a.CreatedAt.ToDateTimeOffset() : DateTimeOffset.UnixEpoch)
                     .First();
                 chosen[g.Key] = best;
             }
@@ -991,4 +1011,5 @@ namespace Nuuz.Infrastructure.Services
         }
     }
 }
+
 
