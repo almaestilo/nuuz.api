@@ -177,11 +177,10 @@ builder.Services.AddAuthentication()
 var app = builder.Build();
 
 // --------------- Dev helpers: Swagger -------------------
-if (app.Environment.IsDevelopment())
-{
+
     app.UseSwagger();
     app.UseSwaggerUI();
-}
+
 
 // --------- Pipeline order (CORS before static) ----------
 app.UseHttpsRedirection();
