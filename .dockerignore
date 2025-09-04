@@ -1,0 +1,26 @@
+# Folders
+**/bin/
+**/obj/
+.git/
+.vs/
+.vscode/
+
+# OS / tooling
+*.swp
+*.swo
+*.user
+*.suo
+*.tmp
+.DS_Store
+
+# Node (if any)
+node_modules/
+
+# Docker
+Dockerfile*
+!Dockerfile
+.dockerignore
+
+# Logs
+**/*.log
+
