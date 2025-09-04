@@ -46,8 +46,9 @@ public sealed class InterestMatcher : IInterestMatcher
             // avoid anchoring to start/end; \b handles alnum boundaries
             if (Regex.IsMatch(hay, $@"\b{Regex.Escape(key)}\b")) score += 2;
 
-            // Loose contains (e.g., "technology" in "biotechnology") – last resort
-            if (score == 0 && hay.Contains(key)) score += 1;
+            // Loose contains disabled by default to avoid false positives (e.g., "esports" vs "sports").
+            // If you want it back, gate behind a config flag.
+            // if (score == 0 && hay.Contains(key)) score += 1;
 
             if (score > 0)
                 scored.Add((i.Id, score));

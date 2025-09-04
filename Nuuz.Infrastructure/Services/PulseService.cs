@@ -29,7 +29,7 @@ namespace Nuuz.Infrastructure.Services
             int take = 12,
             CancellationToken ct = default);
 
-        Task GenerateHourAsync(string timezone, int? overrideHourUtc = null, int take = 12, CancellationToken ct = default);
+        Task GenerateHourAsync(string timezone, int? overrideHourUtc = null, int take = 12, bool heuristicsOnly = false, bool onlyIfMissing = false, CancellationToken ct = default);
     }
 
     public sealed class PulseService : IPulseService
@@ -71,9 +71,34 @@ namespace Nuuz.Infrastructure.Services
         public async Task<PulseTodayDto> GetTodayAsync(string timezone, int take = 12, CancellationToken ct = default)
         {
             var (dateYmd, localHour) = NowLocal(timezone);
+            var tzInfo = FindTz(timezone);
+            var nowLocal = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, tzInfo);
+            int minute = nowLocal.Minute;
+
             var cur = await _repo.GetAsync(dateYmd, localHour)
                       ?? new PulseSnapshotHour { Id = localHour.ToString("D2"), UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow), Items = new() };
             var hours = await _repo.ListHoursAsync(dateYmd);
+
+            // Smooth rollover and optional on-demand heuristics warmup
+            int warmupMin = Math.Clamp(ParseInt(_cfg["Pulse:WarmupMinutes"], 5), 0, 20);
+            int ondemandAfterMin = Math.Clamp(ParseInt(_cfg["Pulse:OnDemand:HeuristicsAfterMinutes"], 8), 0, 59);
+            if ((cur.Items?.Count ?? 0) == 0)
+            {
+                if (minute < warmupMin)
+                {
+                    var prev = hours.Where(h => h.Hour < localHour)
+                                     .OrderByDescending(h => h.Hour)
+                                     .Select(h => h.Doc)
+                                     .FirstOrDefault(d => (d.Items?.Count ?? 0) > 0);
+                    if (prev is not null) cur = prev;
+                }
+                else if (minute >= ondemandAfterMin)
+                {
+                    await GenerateHourAsync(timezone, take: Math.Max(take, 12), heuristicsOnly: true, onlyIfMissing: true, ct: ct);
+                    var freshly = await _repo.GetAsync(dateYmd, localHour);
+                    if (freshly is not null) cur = freshly;
+                }
+            }
 
             var items = (cur.Items ?? new List<PulseItem>());
 
@@ -128,11 +153,34 @@ namespace Nuuz.Infrastructure.Services
             double blend = blendOverride ?? savedMood?.Blend ?? 0.3;           // 0..1
 
             var (dateYmd, localHour) = NowLocal(timezone);
+            var tzInfo = FindTz(timezone);
+            var nowLocal = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, tzInfo);
+            int minute = nowLocal.Minute;
 
             // Fetch current hour and hour list
             var cur = await _repo.GetAsync(dateYmd, localHour)
                       ?? new PulseSnapshotHour { Id = localHour.ToString("D2"), UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow), Items = new() };
             var hours = await _repo.ListHoursAsync(dateYmd);
+
+            int warmupMin = Math.Clamp(ParseInt(_cfg["Pulse:WarmupMinutes"], 5), 0, 20);
+            int ondemandAfterMin = Math.Clamp(ParseInt(_cfg["Pulse:OnDemand:HeuristicsAfterMinutes"], 8), 0, 59);
+            if ((cur.Items?.Count ?? 0) == 0)
+            {
+                if (minute < warmupMin)
+                {
+                    var prev = hours.Where(h => h.Hour < localHour)
+                                     .OrderByDescending(h => h.Hour)
+                                     .Select(h => h.Doc)
+                                     .FirstOrDefault(d => (d.Items?.Count ?? 0) > 0);
+                    if (prev is not null) cur = prev;
+                }
+                else if (minute >= ondemandAfterMin)
+                {
+                    await GenerateHourAsync(timezone, take: Math.Max(take, 12), heuristicsOnly: true, onlyIfMissing: true, ct: ct);
+                    var freshly = await _repo.GetAsync(dateYmd, localHour);
+                    if (freshly is not null) cur = freshly;
+                }
+            }
 
             // Global = current hour top N (unchanged)
             var global = (cur.Items ?? new List<PulseItem>())
@@ -611,7 +659,7 @@ namespace Nuuz.Infrastructure.Services
         }
 
         // ------------- WRITE (hourly snapshot) -------------
-        public async Task GenerateHourAsync(string timezone, int? overrideHourUtc = null, int take = 12, CancellationToken ct = default)
+        public async Task GenerateHourAsync(string timezone, int? overrideHourUtc = null, int take = 12, bool heuristicsOnly = false, bool onlyIfMissing = false, CancellationToken ct = default)
         {
             // --- knobs (pool size & diversity) ---
             int storeCount = Math.Clamp(ParseInt(_cfg["Pulse:Snapshot:StoreCount"], 60), 20, 120);
@@ -628,6 +676,12 @@ namespace Nuuz.Infrastructure.Services
 
             var startUtc = startLocal.ToUniversalTime();
             var endUtc = endLocal.ToUniversalTime();
+
+            if (onlyIfMissing)
+            {
+                var exists = await _repo.ExistsAsync($"{nowLocal:yyyy-MM-dd}", nowLocal.Hour);
+                if (exists) return;
+            }
 
             // Fetch TODAY’s articles
             Query q = _db.Collection("Articles")
@@ -758,7 +812,7 @@ namespace Nuuz.Infrastructure.Services
             var maxCandidates = ClampInt(ParseInt(_cfg["Pulse:Reranker:MaxCandidates"], 80), 20, 200);
             var window = cands.OrderByDescending(x => x.Raw).Take(maxCandidates).ToList();
 
-            var useLLM = ParseBool(_cfg["Pulse:Reranker:Enabled"], true) && _reranker is not null;
+            var useLLM = (!heuristicsOnly) && ParseBool(_cfg["Pulse:Reranker:Enabled"], true) && _reranker is not null;
             List<PulseItem> items;
 
             if (useLLM && window.Count >= 10)

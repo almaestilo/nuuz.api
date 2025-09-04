@@ -8,6 +8,22 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Remove="onnx\config.json" />
+    <Content Remove="onnx\special_tokens_map.json" />
+    <Content Remove="onnx\tokenizer.json" />
+    <Content Remove="onnx\tokenizer_config.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="onnx\config.json" />
+    <None Include="onnx\special_tokens_map.json" />
+    <None Include="onnx\tokenizer.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Include="onnx\tokenizer_config.json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="CodeHollow.FeedReader" Version="1.2.6" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.4.0" />
 	  <PackageReference Include="Google.Cloud.Storage.V1" Version="4.13.0" />
@@ -27,9 +43,18 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Update="appsettings.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
     <Content Update="wwwroot\oauth\client-metadata.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="onnx\model.onnx">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

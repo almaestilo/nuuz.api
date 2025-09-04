@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace Nuuz.Infrastructure.Services
 {
@@ -20,6 +21,8 @@ namespace Nuuz.Infrastructure.Services
         private readonly IUserSaveRepository _saves;
         private readonly IInterestRepository _interests;
         private readonly IMoodFeedbackService _moodFeedback;
+        private readonly IMoodModelService _moodModel;
+        private readonly IConfiguration _cfg;
 
         // Editorial tuning
         private readonly string[] _penaltyKeywords;     // lowercased
@@ -33,6 +36,7 @@ namespace Nuuz.Infrastructure.Services
             IUserSaveRepository saves,
             IInterestRepository interests,
             IMoodFeedbackService moodFeedback,
+            IMoodModelService moodModel,
             IConfiguration cfg
         )
         {
@@ -42,6 +46,8 @@ namespace Nuuz.Infrastructure.Services
             _saves = saves;
             _interests = interests;
             _moodFeedback = moodFeedback;
+            _moodModel = moodModel;
+            _cfg = cfg;
 
             _penaltyKeywords = cfg.GetSection("Pulse:PenaltyKeywords").GetChildren()
                                   .Select(c => (c.Value ?? "").Trim().ToLowerInvariant())
@@ -78,7 +84,7 @@ namespace Nuuz.Infrastructure.Services
                 qCreated = qCreated.StartAfter(ts);
             }
 
-            // ── OVERRIDE: mood paused → show recency only
+            // -- OVERRIDE: mood paused ? show recency only
             if (overrideMood)
             {
                 var recent = await TryRecentAsync(limit * 2, qPublished, qCreated, qArbitrary);
@@ -103,7 +109,7 @@ namespace Nuuz.Infrastructure.Services
                 };
             }
 
-            // ── NORMAL PATH
+            // -- NORMAL PATH
             var selectedIds = (user.InterestIds ?? new List<string>()).Take(10).ToList();
 
             Query baseQ = qPublished; // prefer PublishedAt
@@ -164,6 +170,13 @@ namespace Nuuz.Infrastructure.Services
                 docs = preferred.Concat(others).ToList();
             }
 
+            // Optional: strict interest-only mode (no off-topic backfills)
+            var strictOnly = _cfg.GetValue<bool>("Feed:StrictInterestOnly");
+            if (strictOnly && selectedIds.Count > 0)
+            {
+                docs = docs.Where(a => (a.InterestMatches ?? new List<string>()).Intersect(selectedIds).Any()).ToList();
+            }
+
             // ---------- scoring / ordering ----------
             var tuning = MoodTuning.Create(mood, blend, overrideMood);
 
@@ -171,6 +184,10 @@ namespace Nuuz.Infrastructure.Services
             Dictionary<string, Dictionary<string, double>> profile =
                 tuning.Enabled ? await _moodFeedback.GetProfileAsync(firebaseUid, tuning.Mood, System.Threading.CancellationToken.None)
                                : new();
+
+            MoodModel? model = null;
+            if (tuning.Enabled)
+                model = await _moodModel.GetModelAsync(firebaseUid, tuning.Mood, CancellationToken.None);
 
             // mood centroids (user + global) for vector similarity boost
             double[]? userCentroid = null, globalCentroid = null;
@@ -198,7 +215,7 @@ namespace Nuuz.Infrastructure.Services
 
             foreach (var a in docs)
             {
-                var published = a.PublishedAt.ToDateTimeOffset();
+                var published = EffectiveTime(a);
                 double recencyHours = Math.Max(1, (now - published).TotalHours);
                 double recencyScore = 1.0 / Math.Pow(recencyHours, 0.35);
 
@@ -206,7 +223,18 @@ namespace Nuuz.Infrastructure.Services
                 double interestScore = interestHit ? 0.8 : 0.2;
 
                 double moodScore = 0; string? moodWhy = null;
-                if (tuning.Enabled) moodScore = tuning.ScoreArticle(a, out moodWhy);
+                double heuristicScore = 0; double? modelScore = null;
+                if (tuning.Enabled)
+                {
+                    heuristicScore = tuning.ScoreArticle(a, out moodWhy);
+                    moodScore = heuristicScore;
+                    if (model is not null)
+                    {
+                        modelScore = model.Predict(a);
+                        moodScore = (moodScore + modelScore.Value) * 0.5;
+                    }
+                    await _moodModel.RecordEvaluationAsync(firebaseUid, tuning.Mood, a.Id, heuristicScore, modelScore);
+                }
 
                 double noveltyScore = tuning.ChallengeFactor > 0 ? Math.Min(0.5, (a.Tags?.Count ?? 0) * 0.05) : 0.0;
                 double learned = tuning.Enabled ? LearnedAffinityBoost(a, profile) : 0.0;
@@ -263,7 +291,7 @@ namespace Nuuz.Infrastructure.Services
             // Primary ordering by total
             var ordered = scored
                 .OrderByDescending(s => s.Total)
-                .ThenByDescending(s => s.A.PublishedAt.ToDateTimeOffset())
+                .ThenByDescending(s => EffectiveTime(s.A))
                 .ToList();
 
             // Mood-first selection with threshold relaxation
@@ -327,8 +355,12 @@ namespace Nuuz.Infrastructure.Services
                 moodWhySelector: id => finalDocs.First(y => y.A.Id == id).Why
             );
 
-            var lastTime = finalDocs.LastOrDefault().A.PublishedAt;
-            var nextCursor2 = lastTime.ToDateTimeOffset().UtcTicks.ToString();
+            string? nextCursor2 = null;
+            if (finalDocs.Count > 0)
+            {
+                var lastTime = EffectiveTime(finalDocs[^1].A);
+                nextCursor2 = lastTime.UtcTicks.ToString();
+            }
 
             var explanations = new List<string> {
                 tuning.Enabled ? $"Tuned for {tuning.Mood} • {tuning.BlendLabel}" : "Showing all (no mood filter)"
@@ -380,7 +412,7 @@ namespace Nuuz.Infrastructure.Services
                 ordered = articles
                     .Select(a => (A: a, Score: tuning.ScoreArticle(a, out _)))
                     .OrderByDescending(x => x.Score)
-                    .ThenByDescending(x => x.A.PublishedAt.ToDateTimeOffset())
+                    .ThenByDescending(x => EffectiveTime(x.A))
                     .Select(x => x.A)
                     .ToList();
             }
@@ -405,7 +437,7 @@ namespace Nuuz.Infrastructure.Services
                     SourceId = a.SourceId,
                     Title = a.Title,
                     Author = a.Author,
-                    PublishedAt = a.PublishedAt.ToDateTimeOffset(),
+                    PublishedAt = EffectiveTime(a),
                     ImageUrl = a.ImageUrl,
                     Summary = a.Summary,
                     Vibe = a.Vibe,
@@ -417,8 +449,13 @@ namespace Nuuz.Infrastructure.Services
                 });
             }
 
-            var nextSaved = savesSnap.Documents.LastOrDefault()?.GetValue<Timestamp>("savedAt")
-                .ToDateTimeOffset().UtcTicks.ToString();
+            string? nextSaved = null;
+            var lastSavedDoc = savesSnap.Documents.LastOrDefault();
+            if (lastSavedDoc != null)
+            {
+                var savedAt = lastSavedDoc.GetValue<Timestamp>("savedAt");
+                nextSaved = savedAt.ToDateTimeOffset().UtcTicks.ToString();
+            }
 
             return new FeedPageDto { Items = items, NextCursor = nextSaved, Tuned = tuning.Enabled, Explanations = explanations };
         }
@@ -477,6 +514,17 @@ namespace Nuuz.Infrastructure.Services
             => throw new NotImplementedException();
 
         // -------- helpers --------
+
+        private static DateTimeOffset EffectiveTime(Article a)
+        {
+            var published = a.PublishedAt;
+            if (!published.Equals(default(Timestamp))) return published.ToDateTimeOffset();
+
+            var created = a.CreatedAt;
+            if (!created.Equals(default(Timestamp))) return created.ToDateTimeOffset();
+
+            return DateTimeOffset.UnixEpoch;
+        }
         private async Task<List<Article>> TryRecentAsync(int take, params Query[] queries)
         {
             foreach (var q in queries)
@@ -525,7 +573,7 @@ namespace Nuuz.Infrastructure.Services
                     SourceId = a.SourceId,
                     Title = a.Title,
                     Author = a.Author,
-                    PublishedAt = a.PublishedAt.ToDateTimeOffset(),
+                    PublishedAt = EffectiveTime(a),
                     ImageUrl = a.ImageUrl,
                     Summary = a.Summary,
                     Vibe = a.Vibe,
@@ -561,6 +609,28 @@ namespace Nuuz.Infrastructure.Services
             bits.Add("Fresh");
             if (!string.IsNullOrWhiteSpace(moodWhy)) bits.Add(moodWhy);
             return string.Join(" • ", bits.Distinct());
+        }
+        // Verify that an article truly matches one of the selected interests by token/synonym hit
+        private static bool VerifiedInterestHit(Article a, List<string> selectedIds, Dictionary<string, string> interestNameById)
+        {
+            if (selectedIds is null || selectedIds.Count == 0) return false;
+            var overlap = (a.InterestMatches ?? new List<string>()).Intersect(selectedIds).ToList();
+            if (overlap.Count == 0) return false;
+
+            var titleTags = ((a.Title ?? string.Empty) + " " + string.Join(' ', a.Tags ?? new List<string>())).ToLowerInvariant();
+            var tokens = Tokenize(titleTags);
+
+            foreach (var id in overlap)
+            {
+                if (!interestNameById.TryGetValue(id, out var name)) continue;
+                foreach (var syn in GetSynonymsForInterest(name))
+                {
+                    var s = (syn ?? string.Empty).Trim().ToLowerInvariant();
+                    if (s.Length == 0) continue;
+                    if (tokens.Contains(s)) return true;
+                }
+            }
+            return false;
         }
 
         private static string? MergeWhy(string? a, string? b)
@@ -778,7 +848,7 @@ namespace Nuuz.Infrastructure.Services
             }
         }
 
-        // Learned profile → affinity boost (kept from your original)
+        // Learned profile ? affinity boost (kept from your original)
         private static double LearnedAffinityBoost(Article a, Dictionary<string, Dictionary<string, double>> profile)
         {
             double s = 0;
@@ -871,8 +941,8 @@ namespace Nuuz.Infrastructure.Services
             foreach (var g in groups)
             {
                 var best = g
-                    .OrderByDescending(a => a.PublishedAt.ToDateTimeOffset())
-                    .ThenByDescending(a => a.CreatedAt.ToDateTimeOffset())
+                    .OrderByDescending(a => EffectiveTime(a))
+                    .ThenByDescending(a => (a.CreatedAt != null) ? a.CreatedAt.ToDateTimeOffset() : DateTimeOffset.UnixEpoch)
                     .First();
                 chosen[g.Key] = best;
             }
@@ -941,3 +1011,5 @@ namespace Nuuz.Infrastructure.Services
         }
     }
 }
+
+
