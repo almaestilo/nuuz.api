@@ -1,11 +1,13 @@
 ﻿// Nuuz.Api/Controllers/DevDiagController.cs
 using Google.Cloud.Firestore;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Nuuz.Api.Controllers;
 
 [ApiController]
 [Route("api/dev/diag")]
+[Authorize]
 public class DevDiagController : ControllerBase
 {
     private readonly FirestoreDb _db;

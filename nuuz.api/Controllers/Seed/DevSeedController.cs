@@ -1,5 +1,6 @@
 ﻿// Nuuz.Api/Controllers/DevSeedController.cs
 using Google.Cloud.Firestore;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Nuuz.Application.Abstraction;
 using Nuuz.Domain.Entities;
@@ -9,6 +10,7 @@ namespace Nuuz.Api.Controllers;
 
 [ApiController]
 [Route("api/dev")]
+[Authorize]
 public class DevSeedController : ControllerBase
 {
     private readonly IArticleRepository _articles;

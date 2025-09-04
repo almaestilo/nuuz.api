@@ -1,4 +1,4 @@
-using System.Net.Http.Headers;
+﻿using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.OpenApi.Models;
 using Microsoft.IdentityModel.Tokens;
@@ -21,13 +21,58 @@ builder.Services.AddCors(options =>
                 if (string.IsNullOrWhiteSpace(origin)) return false;
                 try
                 {
-                    var host = new Uri(origin).Host.ToLowerInvariant();
-                    return host == "localhost"
-                        || host == "127.0.0.1"
+                    var uri = new Uri(origin);
+                    var host = uri.Host.ToLowerInvariant();
+
+                    // 1) Always allow local/dev tunnels
+                    if (host == "localhost" || host == "127.0.0.1"
                         || host.EndsWith(".ngrok-free.app")
                         || host.EndsWith(".trycloudflare.com")
                         || host.EndsWith(".loca.lt")
-                        || host.EndsWith(".devtunnels.ms");
+                        || host.EndsWith(".devtunnels.ms"))
+                    {
+                        return true;
+                    }
+
+                    // 2) Allow configured public app base URL origin (if set)
+                    var cfg = builder.Configuration;
+                    var appUrl = cfg["Share:PublicAppBaseUrl"];
+                    if (!string.IsNullOrWhiteSpace(appUrl) && Uri.TryCreate(appUrl, UriKind.Absolute, out var appUri))
+                    {
+                        // Compare by host (and port if specified)
+                        var appHost = appUri.Host.ToLowerInvariant();
+                        if (host == appHost)
+                        {
+                            // If port is explicitly set in the configured URL, ensure it matches too
+                            if (!appUri.IsDefaultPort && appUri.Port != uri.Port) return false;
+                            return true;
+                        }
+                    }
+
+                    // 3) Explicitly allow our DO app frontends (safe, narrow match)
+                    // Example: https://walrus-app-47uqn.ondigitalocean.app
+                    if (host.StartsWith("walrus-app-") && host.EndsWith(".ondigitalocean.app"))
+                    {
+                        return true;
+                    }
+
+                    // 4) Optional extra origins from configuration: Cors:AllowedOrigins (array of full origins)
+                    var extra = cfg.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+                    foreach (var o in extra)
+                    {
+                        if (string.IsNullOrWhiteSpace(o)) continue;
+                        if (Uri.TryCreate(o, UriKind.Absolute, out var extraUri))
+                        {
+                            var extraHost = extraUri.Host.ToLowerInvariant();
+                            if (host == extraHost)
+                            {
+                                if (!extraUri.IsDefaultPort && extraUri.Port != uri.Port) continue;
+                                return true;
+                            }
+                        }
+                    }
+
+                    return false;
                 }
                 catch
                 {
@@ -36,7 +81,7 @@ builder.Services.AddCors(options =>
             })
             .AllowAnyHeader()
             .AllowAnyMethod();
-        // .AllowCredentials(); // only if you use cookies in dev
+        // .AllowCredentials(); // enable only if you use cookie auth
     });
 });
 
@@ -94,7 +139,7 @@ else
 {
     builder.Services.AddScoped<IInterestMatcher, InterestMatcher>();
 }
-// IMPORTANT: Scoped (not singleton) � it depends on scoped IArticleRepository
+// IMPORTANT: Scoped (not singleton) — it depends on scoped IArticleRepository
 builder.Services.AddScoped<IMoodFeedbackService, MoodFeedbackService>();
 builder.Services.AddScoped<IMoodModelService, MoodModelService>();
 builder.Services.AddScoped<IPulseService, PulseService>();
@@ -214,4 +259,5 @@ app.MapGet("/_debug/webroot", (IWebHostEnvironment env) =>
 }).AllowAnonymous();
 
 app.Run();
+
 
