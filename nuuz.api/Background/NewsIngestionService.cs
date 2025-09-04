@@ -37,17 +37,32 @@ namespace Nuuz.Infrastructure.Services
 
             _sources = config.GetSection("Ingestion:Sources").Get<string[]>() ?? Array.Empty<string>();
             _horizonDays = Math.Max(1, config.GetValue<int?>("Ingestion:HorizonDays") ?? 5);
+
+            var env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Unknown";
+            _log.LogInformation(
+                "NewsIngestionService configured. Env={env}, IntervalMinutes={interval}, Sources={sources}, HorizonDays={horizon}",
+                env,
+                _interval.TotalMinutes,
+                _sources.Length,
+                _horizonDays);
         }
 
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
-            _log.LogInformation("Ingestion starting every {m} minutes", _interval.TotalMinutes);
+            _log.LogInformation("Ingestion starting every {m} minutes with {n} sources", _interval.TotalMinutes, _sources.Length);
             using var timer = new PeriodicTimer(_interval);
 
             while (await timer.WaitForNextTickAsync(ct))
             {
                 try
                 {
+                    if (_sources.Length == 0)
+                    {
+                        _log.LogWarning("No sources configured. Skipping cycle.");
+                        continue;
+                    }
+
+                    _log.LogInformation("Ingestion cycle started at {utc}", DateTime.UtcNow);
                     using var scope = _scopeFactory.CreateScope();
 
                     var db = scope.ServiceProvider.GetRequiredService<FirestoreDb>();
@@ -63,8 +78,12 @@ namespace Nuuz.Infrastructure.Services
                         if (ct.IsCancellationRequested) break;
                         await IngestFeed(feedUrl, db, articles, matcher, summarizer, spark, unified, extractor, ct);
                     }
+                    _log.LogInformation("Ingestion cycle finished at {utc}", DateTime.UtcNow);
                 }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    _log.LogInformation("Ingestion cycle canceled (cancellation requested)");
+                }
                 catch (Exception ex)
                 {
                     _log.LogError(ex, "Ingestion cycle failed");
@@ -89,6 +108,8 @@ namespace Nuuz.Infrastructure.Services
             {
                 _log.LogInformation("Fetching feed {feed}", feedUrl);
                 var feed = await FeedReader.ReadAsync(feedUrl);
+                var total = feed?.Items?.Count ?? 0;
+                _log.LogInformation("Fetched {count} items from {feedTitle}", total, feed?.Title ?? feedUrl);
 
                 using var sem = new SemaphoreSlim(4);
                 var tasks = new List<Task>();
@@ -101,14 +122,26 @@ namespace Nuuz.Infrastructure.Services
                         try
                         {
                             var url = item.Link?.Trim();
-                            if (string.IsNullOrWhiteSpace(url)) return;
+                            if (string.IsNullOrWhiteSpace(url))
+                            {
+                                _log.LogDebug("Skip item with empty URL in {feed}", feedUrl);
+                                return;
+                            }
 
                             var published = item.PublishingDate ?? DateTime.UtcNow;
-                            if (published < DateTime.UtcNow.AddDays(-_horizonDays)) return;
+                            if (published < DateTime.UtcNow.AddDays(-_horizonDays))
+                            {
+                                _log.LogDebug("Skip old item {url} published {published}", url, published);
+                                return;
+                            }
 
                             var id = HashUtil.UrlHash(url);
                             var existing = await articles.GetAsync(id);
-                            if (existing is not null) return;
+                            if (existing is not null)
+                            {
+                                _log.LogDebug("Skip existing item {url} with id {id}", url, id);
+                                return;
+                            }
 
                             var title = item.Title?.Trim() ?? "";
                             var rssHtml = (item.Content ?? item.Description ?? "").Trim();
@@ -230,6 +263,7 @@ $@"<h2>Nuuz SparkNotes</h2>
                             };
 
                             await articles.AddAsync(art);
+                            _log.LogInformation("Added article {id} from {url}", id, url);
                         }
                         catch (Exception exOne)
                         {
@@ -243,6 +277,7 @@ $@"<h2>Nuuz SparkNotes</h2>
                 }
 
                 await Task.WhenAll(tasks);
+                _log.LogInformation("Completed processing for feed {feed}", feedUrl);
             }
             catch (Exception ex)
             {
